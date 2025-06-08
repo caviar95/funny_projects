@@ -1,0 +1,3 @@
+[submodule "secure_udp/external/libsodium"]
+	path = secure_udp/external/libsodium
+	url = https://github.com/jedisct1/libsodium.git
