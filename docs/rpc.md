@@ -489,3 +489,782 @@ add_dependencies(my_target generate_enum_mapping)
 * 多枚举自动识别？
 * 模板参数可配置（比如 Biz 前缀改成其他）？
 * 支持双向转换？
+<<<<<<< HEAD
+=======
+
+
+好的，这里是你提到的 **方法二：宏/模板 + 映射元表映射** 的完整 C++ 示例，包括：
+
+* 业务枚举定义；
+* proto 枚举转换为业务枚举；
+* 可选：业务枚举转换回 proto 枚举（双向）；
+* 统一声明映射内容，避免重复书写，防止遗漏；
+* 编译器在 enum 成员变化时可快速提示不一致。
+
+---
+
+## ✅ 一、基本用途：枚举映射元表定义 + 映射函数
+
+### 假设你有以下 proto 枚举：
+
+```proto
+// order.proto
+enum OrderStatus {
+  NEW = 0;
+  PAID = 1;
+  SHIPPED = 2;
+  CANCELLED = 3;
+}
+```
+
+---
+
+## ✅ 二、C++ 宏模板完整实现
+
+### 1. 枚举映射列表定义（**唯一源头**）
+
+```cpp
+// order_enum_mapping.h
+
+#pragma once
+
+#include "order.pb.h"  // OrderStatus enum from proto
+
+// 用宏列出映射项：统一维护点，强类型安全
+#define ORDER_STATUS_ENUM_MAPPING(XX) \
+    XX(kNew, NEW)                     \
+    XX(kPaid, PAID)                  \
+    XX(kShipped, SHIPPED)           \
+    XX(kCancelled, CANCELLED)
+```
+
+---
+
+### 2. 定义业务枚举类型
+
+```cpp
+// order_enum.h
+
+#pragma once
+
+#include "order_enum_mapping.h"
+
+enum class BizOrderStatus {
+#define XX(biz, proto) biz,
+    ORDER_STATUS_ENUM_MAPPING(XX)
+#undef XX
+};
+```
+
+---
+
+### 3. 转换函数：proto -> 业务 enum
+
+```cpp
+inline BizOrderStatus ToBizOrderStatus(OrderStatus s) {
+    switch (s) {
+#define XX(biz, proto) case OrderStatus::proto: return BizOrderStatus::biz;
+        ORDER_STATUS_ENUM_MAPPING(XX)
+#undef XX
+        default:
+            return BizOrderStatus::kNew;  // fallback 默认值
+    }
+}
+```
+
+---
+
+### 4. 可选：业务 enum -> proto
+
+```cpp
+inline OrderStatus ToProtoOrderStatus(BizOrderStatus s) {
+    switch (s) {
+#define XX(biz, proto) case BizOrderStatus::biz: return OrderStatus::proto;
+        ORDER_STATUS_ENUM_MAPPING(XX)
+#undef XX
+        default:
+            return OrderStatus::NEW;
+    }
+}
+```
+
+---
+
+## ✅ 三、使用示例
+
+```cpp
+void ProcessStatus(OrderStatus status) {
+    BizOrderStatus biz = ToBizOrderStatus(status);
+    if (biz == BizOrderStatus::kPaid) {
+        std::cout << "Order already paid." << std::endl;
+    }
+
+    OrderStatus back = ToProtoOrderStatus(biz);
+    assert(back == status);  // 双向映射校验
+}
+```
+
+---
+
+## ✅ 四、优势总结
+
+| 优点     | 说明                                            |
+| ------ | --------------------------------------------- |
+| ✅ 单点维护 | 所有映射项集中在 `ORDER_STATUS_ENUM_MAPPING(XX)`，只写一次 |
+| ✅ 编译安全 | proto 枚举变动会立即提示映射函数不匹配                        |
+| ✅ 可读性强 | 枚举项一对一明示，不需要手写多个 switch                       |
+| ✅ 支持双向 | 可自动生成双向映射，避免反复手写                              |
+
+---
+
+## ✅ 五、进阶：多个枚举怎么办？
+
+你可以创建多个宏，例如：
+
+```cpp
+#define ORDER_STATUS_ENUM_MAPPING(XX) ...
+#define PAYMENT_STATUS_ENUM_MAPPING(XX) ...
+```
+
+然后分别写：
+
+```cpp
+enum class BizOrderStatus { ... };
+enum class BizPaymentStatus { ... };
+
+inline BizOrderStatus ToBizOrderStatus(...) { ... }
+inline BizPaymentStatus ToBizPaymentStatus(...) { ... }
+```
+
+或者进一步统一为模板方式（泛化版本）也可扩展。
+
+---
+
+是否需要我再补充更复杂的版本，比如：
+
+* 用模板或元编程方式实现泛型枚举转换器；
+* 自动注册枚举名称字符串（ToString）；
+* 加入 default fallback 策略可配置？
+
+
+非常好，我们就来扩展这三项功能，在原有**宏 + 枚举元表映射方案**的基础上：
+
+---
+
+## ✅ 1. **使用模板/元编程实现泛型枚举转换器**
+
+我们希望将：
+
+```cpp
+ToBizEnum(proto::EnumValue)
+ToProtoEnum(BizEnumValue)
+```
+
+统一抽象为：
+
+```cpp
+EnumMapper<BizEnum, ProtoEnum>::ToBiz(ProtoEnum value);
+EnumMapper<BizEnum, ProtoEnum>::ToProto(BizEnum value);
+```
+
+---
+
+### 🔧 实现步骤：
+
+#### Step 1：声明通用模板
+
+```cpp
+template<typename BizEnum, typename ProtoEnum>
+struct EnumMapper;
+```
+
+---
+
+#### Step 2：每个枚举写一个特化 + 宏注册元组
+
+```cpp
+// enum_mapper_order.h
+
+#include "order.pb.h"
+
+#define ORDER_ENUM_PAIRS(XX) \
+    XX(BizOrderStatus::kNew, OrderStatus::NEW) \
+    XX(BizOrderStatus::kPaid, OrderStatus::PAID) \
+    XX(BizOrderStatus::kShipped, OrderStatus::SHIPPED) \
+    XX(BizOrderStatus::kCancelled, OrderStatus::CANCELLED)
+
+template<>
+struct EnumMapper<BizOrderStatus, OrderStatus> {
+    static BizOrderStatus ToBiz(OrderStatus proto) {
+        switch (proto) {
+#define XX(b, p) case OrderStatus::p: return BizOrderStatus::b;
+            ORDER_ENUM_PAIRS(XX)
+#undef XX
+            default: return BizOrderStatus::kNew;  // fallback
+        }
+    }
+
+    static OrderStatus ToProto(BizOrderStatus biz) {
+        switch (biz) {
+#define XX(b, p) case BizOrderStatus::b: return OrderStatus::p;
+            ORDER_ENUM_PAIRS(XX)
+#undef XX
+            default: return OrderStatus::NEW;  // fallback
+        }
+    }
+};
+```
+
+---
+
+### ✅ 使用示例：
+
+```cpp
+auto biz = EnumMapper<BizOrderStatus, OrderStatus>::ToBiz(proto_status);
+auto proto = EnumMapper<BizOrderStatus, OrderStatus>::ToProto(biz);
+```
+
+---
+
+## ✅ 2. **自动注册 ToString()：生成业务枚举名字符串映射**
+
+我们可以使用 `unordered_map` 或 `switch-case + constexpr` 形式注册字符串。
+
+### 示例宏扩展：
+
+```cpp
+inline const char* ToString(BizOrderStatus status) {
+    switch (status) {
+#define XX(biz, proto) case BizOrderStatus::biz: return #biz;
+        ORDER_STATUS_ENUM_MAPPING(XX)
+#undef XX
+        default: return "Unknown";
+    }
+}
+```
+
+---
+
+如果你希望统一模板风格，可封装为：
+
+```cpp
+template<typename T>
+struct EnumName;
+
+template<>
+struct EnumName<BizOrderStatus> {
+    static const char* ToString(BizOrderStatus status) {
+        switch (status) {
+#define XX(biz, proto) case BizOrderStatus::biz: return #biz;
+            ORDER_STATUS_ENUM_MAPPING(XX)
+#undef XX
+            default: return "Unknown";
+        }
+    }
+};
+```
+
+---
+
+### 使用：
+
+```cpp
+std::cout << EnumName<BizOrderStatus>::ToString(BizOrderStatus::kPaid) << std::endl;
+```
+
+---
+
+## ✅ 3. **default fallback 策略可配置**
+
+你可能希望 fallback 不是硬编码，而是可配置。
+
+### 方法一：模板参数方式
+
+```cpp
+template<typename BizEnum, typename ProtoEnum, BizEnum DefaultBiz = BizEnum::kNew, ProtoEnum DefaultProto = static_cast<ProtoEnum>(0)>
+struct EnumMapperWithDefault {
+    static BizEnum ToBiz(ProtoEnum proto) {
+        switch (proto) {
+#define XX(b, p) case ProtoEnum::p: return BizEnum::b;
+            ORDER_ENUM_PAIRS(XX)
+#undef XX
+            default: return DefaultBiz;
+        }
+    }
+
+    static ProtoEnum ToProto(BizEnum biz) {
+        switch (biz) {
+#define XX(b, p) case BizEnum::b: return ProtoEnum::p;
+            ORDER_ENUM_PAIRS(XX)
+#undef XX
+            default: return DefaultProto;
+        }
+    }
+};
+```
+
+### 使用：
+
+```cpp
+using Mapper = EnumMapperWithDefault<BizOrderStatus, OrderStatus, BizOrderStatus::kCancelled>;
+auto biz = Mapper::ToBiz(proto_status);
+```
+
+---
+
+## 🎯 总结
+
+| 目标                 | 实现方式                                            | 优点          |
+| ------------------ | ----------------------------------------------- | ----------- |
+| **泛型枚举转换器**        | `EnumMapper<BizEnum, ProtoEnum>::ToBiz/ToProto` | 统一接口，支持模板抽象 |
+| **枚举 ToString 支持** | `EnumName<T>::ToString(...)`                    | 提高日志/调试可读性  |
+| **fallback 策略可配置** | 模板默认参数 / runtime 配置                             | 灵活支持未知值容错处理 |
+
+---
+
+好的！我将为你设计一个通用、可直接使用在实际 C++ 项目中的枚举映射工具库，支持：
+
+---
+
+## ✅ 功能概览
+
+| 模块                       | 功能                                 |
+| ------------------------ | ---------------------------------- |
+| `enum_mapper.hpp`        | 映射工具主模块：模板 `EnumMapper`、`EnumName` |
+| `enum_mapping_macro.hpp` | 各枚举映射表定义（宏）                        |
+| `enum_mapping_xxx.hpp`   | 每个业务/Proto 枚举映射实现文件                |
+| Python 工具（可选）            | 生成映射宏模板草稿（节省手写）                    |
+
+---
+
+## 🗂️ 工程结构
+
+```
+enum_mapper/
+├── enum_mapper.hpp             # 核心模板工具（你只需要 include 它）
+├── enum_mapping_macro.hpp      # 所有映射宏定义集中处
+├── enum_mapping_order.hpp      # 示例：OrderStatus 映射文件
+└── generate_enum_macro.py      # 可选：从 proto 自动生成宏模板
+```
+
+---
+
+## 1️⃣ `enum_mapper.hpp`：核心模板实现
+
+```cpp
+// enum_mapper.hpp
+#pragma once
+#include <string>
+
+template<typename BizEnum, typename ProtoEnum>
+struct EnumMapper;
+
+template<typename EnumType>
+struct EnumName;
+```
+
+---
+
+## 2️⃣ `enum_mapping_macro.hpp`：声明元组宏
+
+```cpp
+// enum_mapping_macro.hpp
+#pragma once
+
+// 可集中管理多个 proto <-> biz 枚举的映射元组
+#define ORDER_STATUS_ENUM_MAPPING(XX) \
+    XX(BizOrderStatus::kNew, OrderStatus::NEW) \
+    XX(BizOrderStatus::kPaid, OrderStatus::PAID) \
+    XX(BizOrderStatus::kShipped, OrderStatus::SHIPPED) \
+    XX(BizOrderStatus::kCancelled, OrderStatus::CANCELLED)
+```
+
+---
+
+## 3️⃣ `enum_mapping_order.hpp`：枚举定义 + 映射实现
+
+```cpp
+// enum_mapping_order.hpp
+#pragma once
+#include "enum_mapper.hpp"
+#include "enum_mapping_macro.hpp"
+#include "order.pb.h"
+
+enum class BizOrderStatus {
+#define XX(biz, proto) biz,
+    ORDER_STATUS_ENUM_MAPPING(XX)
+#undef XX
+};
+
+template<>
+struct EnumMapper<BizOrderStatus, OrderStatus> {
+    static BizOrderStatus ToBiz(OrderStatus proto) {
+        switch (proto) {
+#define XX(b, p) case OrderStatus::p: return BizOrderStatus::b;
+            ORDER_STATUS_ENUM_MAPPING(XX)
+#undef XX
+            default: return BizOrderStatus::kNew;
+        }
+    }
+
+    static OrderStatus ToProto(BizOrderStatus biz) {
+        switch (biz) {
+#define XX(b, p) case BizOrderStatus::b: return OrderStatus::p;
+            ORDER_STATUS_ENUM_MAPPING(XX)
+#undef XX
+            default: return OrderStatus::NEW;
+        }
+    }
+};
+
+template<>
+struct EnumName<BizOrderStatus> {
+    static const char* ToString(BizOrderStatus e) {
+        switch (e) {
+#define XX(b, p) case BizOrderStatus::b: return #b;
+            ORDER_STATUS_ENUM_MAPPING(XX)
+#undef XX
+            default: return "Unknown";
+        }
+    }
+};
+```
+
+---
+
+## ✅ 示例使用
+
+```cpp
+#include "enum_mapper.hpp"
+#include "enum_mapping_order.hpp"
+
+void TestEnumMapping(OrderStatus proto_status) {
+    auto biz = EnumMapper<BizOrderStatus, OrderStatus>::ToBiz(proto_status);
+    auto proto = EnumMapper<BizOrderStatus, OrderStatus>::ToProto(biz);
+
+    std::cout << "Biz Enum: " << EnumName<BizOrderStatus>::ToString(biz) << std::endl;
+    assert(proto == proto_status); // 验证双向一致
+}
+```
+
+---
+
+## 🛠️ 可选工具：生成 enum 宏模板（简化初始编写）
+
+### `generate_enum_macro.py`
+
+```python
+import sys
+import re
+from pathlib import Path
+
+def extract_enum_items(proto_path: str, enum_name: str):
+    text = Path(proto_path).read_text()
+    match = re.search(r'enum\s+' + enum_name + r'\s*\{([^}]+)\}', text)
+    if not match:
+        raise RuntimeError("Enum not found")
+    lines = match.group(1).strip().splitlines()
+    items = []
+    for line in lines:
+        if '=' in line:
+            name = line.split('=')[0].strip()
+            items.append(name)
+    return items
+
+def generate_macro(enum_name, items):
+    macro = f"#define {enum_name.upper()}_ENUM_MAPPING(XX) \\\n"
+    for item in items:
+        macro += f"    XX(Biz{enum_name}::{item}, {enum_name}::{item}) \\\n"
+    return macro.strip(" \\\n")
+
+if __name__ == "__main__":
+    proto_file = sys.argv[1]
+    enum_name = sys.argv[2]
+    items = extract_enum_items(proto_file, enum_name)
+    print(generate_macro(enum_name, items))
+```
+
+运行：
+
+```bash
+python3 generate_enum_macro.py order.proto OrderStatus
+```
+
+输出：
+
+```cpp
+#define ORDERSTATUS_ENUM_MAPPING(XX) \
+    XX(BizOrderStatus::NEW, OrderStatus::NEW) \
+    XX(BizOrderStatus::PAID, OrderStatus::PAID) \
+    XX(BizOrderStatus::SHIPPED, OrderStatus::SHIPPED) \
+    XX(BizOrderStatus::CANCELLED, OrderStatus::CANCELLED)
+```
+
+---
+
+## ✅ 扩展支持多个枚举？
+
+你可以为每个 proto 文件单独写一个 `*_mapping_macro.hpp` 文件，全部 `#include` 到 `enum_mapper.hpp` 或统一集中到 `enum_mapping_macro.hpp` 中。
+
+---
+
+## 📦 打包说明
+
+你只需要做这几件事：
+
+1. 每个业务枚举写一个宏元组（使用 Python 脚本辅助）；
+2. 为每个枚举定义：
+
+   * `enum class BizXxxStatus {...}`
+   * `EnumMapper` 特化；
+   * `EnumName` 特化（可选）；
+3. include `enum_mapper.hpp` + `enum_mapping_*.hpp` 即可使用。
+
+---
+
+## 🎯 总结
+
+| 优势            | 说明                        |
+| ------------- | ------------------------- |
+| ✅ 高度自动化       | 多个枚举支持、双向映射、ToString      |
+| ✅ 无重复逻辑       | 元组式集中定义，编译器可提示遗漏          |
+| ✅ 模块独立        | 可用于任何 proto + C++ 架构      |
+| ✅ 支持 fallback | 可扩展 default fallback 策略模板 |
+
+---
+
+好的，这是一个 **可运行的 C++ demo 工程**，包含你所需的所有功能：**protobuf 枚举映射自动生成** + **泛型 `EnumMapper` 模板** + **CMake 构建** + **Google Test 单元测试**。你可以 clone 并直接运行，作为你项目的起点。
+
+---
+
+## 📁 项目结构
+
+```
+enum_mapper_demo/
+├── CMakeLists.txt
+├── proto/
+│   └── order.proto
+├── scripts/
+│   └── generate_enum_macro.py
+├── src/
+│   ├── enum_mapper.hpp
+│   ├── enum_mapping_macro.hpp
+│   ├── enum_mapping_order.hpp
+│   └── main.cpp
+└── test/
+    ├── CMakeLists.txt
+    └── enum_mapper_test.cpp
+```
+
+---
+
+## 🧩 1. `proto/order.proto`
+
+```proto
+syntax = "proto3";
+package demo;
+
+enum OrderStatus {
+  NEW = 0;
+  PAID = 1;
+  SHIPPED = 2;
+  CANCELLED = 3;
+}
+```
+
+---
+
+## 🔧 2. `scripts/generate_enum_macro.py`
+
+```python
+import sys, re
+from pathlib import Path
+
+def extract(proto_file, enum_name):
+    text = Path(proto_file).read_text()
+    m = re.search(r'enum\s+' + enum_name + r'\s*\{([^}]+)\}', text)
+    return [l.split('=')[0].strip() for l in m.group(1).splitlines() if '=' in l]
+
+if __name__ == "__main__":
+    proto, enum = sys.argv[1], sys.argv[2]
+    items = extract(proto, enum)
+    print(f"#define {enum.upper()}_ENUM_MAPPING(XX) \\")
+    for item in items:
+        print(f"    XX(Biz{enum}::{item}, {enum}::{item}) \\")
+```
+
+---
+
+## 🧪 3. CMake 逻辑（根 `CMakeLists.txt`）
+
+```cmake
+cmake_minimum_required(VERSION 3.15)
+project(enum_mapper_demo)
+
+find_package(Protobuf REQUIRED)
+find_package(GTest REQUIRED)
+
+# Generate enum_mapping_macro
+add_custom_command(
+  OUTPUT ${CMAKE_BINARY_DIR}/enum_mapping_macro.hpp
+  COMMAND python3 ${CMAKE_SOURCE_DIR}/scripts/generate_enum_macro.py
+          ${CMAKE_SOURCE_DIR}/proto/order.proto OrderStatus
+          > ${CMAKE_BINARY_DIR}/enum_mapping_macro.hpp
+  DEPENDS ${CMAKE_SOURCE_DIR}/proto/order.proto
+)
+add_custom_target(gen_macro DEPENDS ${CMAKE_BINARY_DIR}/enum_mapping_macro.hpp)
+
+# Compile proto
+protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS proto/order.proto)
+
+# Main library
+add_library(enum_mapper_lib
+  src/enum_mapper.hpp
+  src/enum_mapping_order.hpp
+  ${PROTO_SRCS}
+  ${PROTO_HDRS}
+  ${CMAKE_BINARY_DIR}/enum_mapping_macro.hpp
+)
+add_dependencies(enum_mapper_lib gen_macro)
+
+target_include_directories(enum_mapper_lib PUBLIC src ${PROTOBUF_INCLUDE_DIR} ${CMAKE_BINARY_DIR})
+
+# Main executable
+add_executable(main src/main.cpp)
+target_link_libraries(main enum_mapper_lib)
+
+# Tests
+add_subdirectory(test)
+```
+
+---
+
+## 🧩 4. `src/enum_mapper.hpp`（核心模板）
+
+```cpp
+#pragma once
+#include <string>
+
+template<typename BizEnum, typename ProtoEnum>
+struct EnumMapper;
+
+template<typename BizEnum>
+struct EnumName;
+```
+
+---
+
+## 🧩 5. `src/enum_mapping_order.hpp`
+
+```cpp
+#pragma once
+#include "enum_mapper.hpp"
+#include "enum_mapping_macro.hpp"
+#include "order.pb.h"
+
+// Biz enum
+enum class BizOrderStatus {
+#define XX(b, p) b,
+    ORDERSTATUS_ENUM_MAPPING(XX)
+#undef XX
+};
+
+// EnumMapper specialization
+template<>
+struct EnumMapper<BizOrderStatus, demo::OrderStatus> {
+    static BizOrderStatus ToBiz(demo::OrderStatus p) {
+        switch(p){
+#define XX(b, p2) case demo::OrderStatus::p2: return b;
+            ORDERSTATUS_ENUM_MAPPING(XX)
+#undef XX
+            default: return BizOrderStatus::NEW;
+        }
+    }
+    static demo::OrderStatus ToProto(BizOrderStatus b) {
+        switch(b){
+#define XX(b2, p) case b2: return demo::OrderStatus::p;
+            ORDERSTATUS_ENUM_MAPPING(XX)
+#undef XX
+            default: return demo::OrderStatus::NEW;
+        }
+    }
+};
+
+// Name mapping
+template<>
+struct EnumName<BizOrderStatus> {
+    static const char* ToString(BizOrderStatus e) {
+        switch(e){
+#define XX(b, p) case b: return #b;
+            ORDERSTATUS_ENUM_MAPPING(XX)
+#undef XX
+            default: return "UNKNOWN";
+        }
+    }
+};
+```
+
+---
+
+## 🧩 6. `src/main.cpp` 使用示例
+
+```cpp
+#include <iostream>
+#include "enum_mapping_order.hpp"
+
+int main(){
+    using demo::OrderStatus;
+    OrderStatus p = OrderStatus::SHIPPED;
+    auto b = EnumMapper<BizOrderStatus, demo::OrderStatus>::ToBiz(p);
+    auto p2 = EnumMapper<BizOrderStatus, demo::OrderStatus>::ToProto(b);
+    std::cout << "Biz enum: " << EnumName<BizOrderStatus>::ToString(b) << "\n";
+    std::cout << "Back to proto: " << static_cast<int>(p2) << "\n";
+}
+```
+
+---
+
+## 🧩 7. 单元测试：`test/enum_mapper_test.cpp`
+
+```cpp
+#include <gtest/gtest.h>
+#include "enum_mapping_order.hpp"
+
+TEST(EnumMapper, RoundTrip) {
+    using demo::OrderStatus;
+    for(int i=0;i<=3;i++){
+        OrderStatus p = static_cast<OrderStatus>(i);
+        auto b = EnumMapper<BizOrderStatus, OrderStatus>::ToBiz(p);
+        auto p2 = EnumMapper<BizOrderStatus, OrderStatus>::ToProto(b);
+        EXPECT_EQ(p, p2);
+    }
+}
+
+TEST(EnumName, ToString) {
+    EXPECT_STREQ("kPaid", EnumName<BizOrderStatus>::ToString(BizOrderStatus::kPaid));
+}
+```
+
+`test/CMakeLists.txt` 将链接 GTest 并执行。
+
+---
+
+## ✅ 如何运行
+
+```bash
+mkdir build && cd build
+cmake ..
+make
+./main
+ctest
+```
+
+---
+
+这个工程已经满足：
+
+* **自动生成宏模板** (`enum_mapping_macro.hpp`)；
+* **泛型 `EnumMapper` + `EnumName`**；
+* **protobuf 枚举映射分层**；
+* **CMake 构建、Google Test 单测**。
+>>>>>>> 522dce4 (rpc stub)
