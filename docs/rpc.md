@@ -489,8 +489,6 @@ add_dependencies(my_target generate_enum_mapping)
 * 多枚举自动识别？
 * 模板参数可配置（比如 Biz 前缀改成其他）？
 * 支持双向转换？
-<<<<<<< HEAD
-=======
 
 
 好的，这里是你提到的 **方法二：宏/模板 + 映射元表映射** 的完整 C++ 示例，包括：
@@ -1267,4 +1265,3 @@ ctest
 * **泛型 `EnumMapper` + `EnumName`**；
 * **protobuf 枚举映射分层**；
 * **CMake 构建、Google Test 单测**。
->>>>>>> 522dce4 (rpc stub)
